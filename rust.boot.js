@@ -1,6 +1,6 @@
 var Module = {};
 
-var asm = require('rust.asm');
+var asm = require('/home/kmcguire/screeps/rust/output/rust.asm.js');
 
 function invoke_i(index) {
   try {
@@ -69,7 +69,8 @@ Module["dynCall_vi"] = function() {
 };
 
 // Reuse the memory.
-var buf = new ArrayBuffer(1024 * 1024 * 10);
+var memsize = 1024 * 1024 * 10;
+var buf = new ArrayBuffer(memsize);
 
 module.exports = {};
 
@@ -80,78 +81,121 @@ module.exports.run = function () {
 		Math: Math,
 	};
 
-	var heapstart = 1024 * 1024 * 5;
+	var heapstart = 1024 * 1024 * 2;
+
+	/*
+		The memory layout is important.
+
+		256b	- static global system parameters region
+		2mb~	- stack region
+		8mb~	- heap region
+
+		Any special heap region is allocated and used
+		from within the normal heap region. A special
+		heap region can be populated by data loaded from
+		the `Memory` object in ASCII/binary form and subsequently
+		stored back by doing a byte for byte copy.
+	*/
+
+	var u32 = new Uint32Array(buf);
+	var f32 = new Float32Array(buf);
 
 	var env = {
-		STACKTOP: 0,
+		STACKTOP: 256,
 		STACK_MAX: heapstart,
 		invoke_i: invoke_i,
 		invoke_ii: invoke_ii,
 		invoke_iii: invoke_iii,
 		invoke_vi: invoke_vi,
-		invoke_vii: invoke_vii,		
+		invoke_vii: invoke_vii,
+		___rust_allocate: null,
 	};
 
-
-	/*
-		This set of functions exposes Screeps to the Rust
-		runtime. For Rust, it expects these functions to
-		handle raw references and values. The Rust code
-		shall incorporate protections to ensure that the 
-		proper type of value is passed to these functions.
-	*/
 	env._creep_move = function (cndx, dir) {
 		console.log('creep move', cndx, dir, creep_index_to_creep[cndx]);
 		creep_index_to_creep[cndx].move(dir);
 	};
 
+	// This was a workaround for what I believe Emscripten was emitting
+	// an llvm_trap call. It did not like writes to the heap.. It did allow
+	// writes with a constant address but anything else emitted the llvm
+	// trap call. I hope until that is fixed that V8 can optimize this by
+	// inlining the call where it is used or it does not slow things down
+	// much. The read32 function simply makes the code look cleaner.
+	env._write32 = function (addr, val) {
+		// Force alignment.
+		u32[addr >> 2] = val;
+	}
 
+	env._read32 = function (addr) {
+		// Force alignment.
+		console.log('reading', addr);
+		return u32[addr >> 2];
+	}
+
+	env._debugmark = function (val) {
+		console.log('debug-mark', val);
+	}
+
+	// Another quick workaround. It solves a problem that I do
+	// not wish to currently spend time trying to rectify. This
+	// is just a make it work hack.
+	Module.asm = asm(glb, env, buf);
+	env.___rust_allocate = Module.asm.___allocate;
 	Module.asm = asm(glb, env, buf);
 
-	// Need to encode the game state as the actual objects
-	// in a binary form which can be interpreted by the Rust
-	// code.
+	// The following encodes the data so that Rust can read
+	// and write it in native form instead of doing active
+	// marshalling of data. This performs one large marshall
+	// of the data.
 
-	var u32 = new Uint32Array(buf);
-	var f32 = new Float32Array(buf);
-
-	var creeps = Game.creeps;
+	//var creeps = Game.creeps;
+	var creeps = {
+		John: { hits: 100, hitsMax: 200 },
+		Mark: { hits: 200, hitsMax: 300 },
+	};
 
 	var ptr_cur = heapstart;
 
 	var creep_index_to_creep = {};
 
-	function load_creeps_into_memory(creeps) {
-		var ndx = ptr_cur >> 2;
+	function make_struct_vector(ptr, ary, cb) {
+		var ndx = 0;
 
-		u32[ndx++] = ptr_cur + 12;
+		u32[ptr++] = (ptr << 4) + 12;
 
-		var szp = ndx++;
+		var szp = ptr;
 
-		ndx++;
-
-		var cnt = 0;
-
-		for (var k in creeps) {
-			var c = creeps[k];
-
-			creep_index_to_creep[cnt] = c;
-
-			u32[ndx++] = cnt;
-			u32[ndx++] = c.hits;
-			u32[ndx++] = c.hitsMax; 
-
-			++cnt;
+		for (var k in ary) {
+			ptr = cb(ptr, ary[k], ndx);
+			++ndx;
 		}
 
-		// There is actually a RawVec and a Vec.
-		// See the Rust stdlib source code.
-		u32[szp++] = cnt | 0;
-		u32[szp++] = cnt | 0;
+		// The RawVec also has a capacity field.
+		u32[szp++] = ndx;
+		u32[szp++] = ndx;
+
+		return ptr;
 	}
 
-	load_creeps_into_memory(creeps);
+	function make_struct_creep(ptr, creep, ndx) {
+		u32[ptr++] = ndx;
+		u32[ptr++] = c.hits;
+		u32[ptr++] = c.hitsMax;
+		return ptr;
+	}
 
+	// Write the game structure into the heap memory.
+	ptr_cur = make_struct_vector(ptr_cur, creeps, make_struct_creep);
+
+	u32[0] = (ptr_cur >> 2) << 2;
+	u32[1] = ((memsize - ptr_cur) >> 2) << 2;
+
+	// Initialize the heap region to have one free chunk.
+	u32[u32[0] >> 2] = 0x2;
+	u32[(u32[0] >> 2) + 1] = u32[1];	
 
 	console.log('tick exit value', Module.asm._game_tick(heapstart));
 };
+
+module.exports.run();
