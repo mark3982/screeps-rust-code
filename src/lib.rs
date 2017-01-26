@@ -103,11 +103,23 @@ extern {
 	pub fn debugmark(val: usize);
 }
 
-// The region the allocator works*mut  in is specified by these;
-// global variables. The ability to select a specific region
-// allows regions to easily be offloaded into the `Memory` for 
-// Screeps as a binary string.
+/// Sets the region for the heap functions.
+pub extern fn __heap_region(addr: usize, size: usize) {
+	unsafe {
+		write32(0, addr as u32);
+		write32(4, size as u32);
+	}
+}
 
+/// Returns the address of a chunk of memory that is of at least the size
+/// specified.
+///
+/// This function is designed to have its region specified. This allocator
+/// is a balance between performance and code size. 
+///
+/// The intention is that there is an abundance of RAM and that each invocation
+/// of the code is going to only use the heap for a few rounds before it is
+/// destroyed, therefore, no work is done to reduce heap segmentation.
 #[no_mangle]
 pub extern fn __allocate(mut size: usize, _align: usize) -> *mut u8 {
 	unsafe {
@@ -172,6 +184,10 @@ pub extern fn __deallocate(ptr: *mut u8, _old_size: usize, _align: usize) {
 	}
 }
 
+/// Copies the specified number of bytes from source to destination.
+///
+/// A version of memcpy to reduce the amount of emitted code. A balance
+/// between performance and code size.
 unsafe fn memcpy(dst: *mut u8, src: *mut u8, size: usize) {
 	let chunks = size / 4;
 	let slack = size - (chunks * 4);

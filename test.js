@@ -19,8 +19,7 @@ rust.setup(function (opts) {
 
 	// Do a light test of the heap.
 	heap_test(asm, 1024 * 10);
-
-}	
+});
 
 /**
 	Do a stress test of the heap in an attempt to break it. This
@@ -64,7 +63,7 @@ function heap_test(asm, itercnt) {
 		}
 
 		// Delete a random chunk.
-		if (Math.random() > 0.8) {
+		if (Math.random() > 0.8 && used.length > 0) {
 			var w = Math.floor(Math.random() * (used.length - 1));
 
 			console.log('__deallocate', used[w][0], used[w][1]);
@@ -83,4 +82,4 @@ function heap_test(asm, itercnt) {
 
 		used.push([addr, allocsz])
 	}
-});
+}

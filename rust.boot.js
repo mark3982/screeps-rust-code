@@ -81,6 +81,13 @@ module.exports.run = function () {
 		var u8 = opts.u8;
 		var asm = opts.asm;
 
+		var creep_index_to_creep = {};
+
+		env._creep_move = function (cndx, dir) {
+			console.log('creep move', cndx, dir, creep_index_to_creep[cndx]);
+			creep_index_to_creep[cndx].move(dir);
+		};		
+
 		// The following encodes the data so that Rust can read
 		// and write it in native form instead of doing active
 		// marshalling of data. This performs one large marshall
@@ -123,7 +130,14 @@ module.exports.run = function () {
 		}
 
 		// Write the game structure into the heap memory.
-		ptr_cur = make_struct_vector(ptr_cur >> 2, creeps, make_struct_creep) << 2;
+		ptr_cur = make_struct_vector(
+			ptr_cur >> 2, 
+			creeps, 
+			function (ptr, creep, ndx) {
+				creep_index_to_creep[ndx] = creep;
+				return make_struct_creep(ptr, creep, ndx);
+			}
+		) << 2;
 
 		u32[0] = (ptr_cur >> 2) << 2;
 		u32[1] = ((memsize - ptr_cur) >> 2) << 2;
@@ -174,11 +188,6 @@ module.exports.setup = function (cb) {
 		___rust_allocate: null,
 	};
 
-	env._creep_move = function (cndx, dir) {
-		console.log('creep move', cndx, dir, creep_index_to_creep[cndx]);
-		creep_index_to_creep[cndx].move(dir);
-	};
-
 	// This was a workaround for what I believe Emscripten was emitting
 	// an llvm_trap call. It did not like writes to the heap.. It did allow
 	// writes with a constant address but anything else emitted the llvm
@@ -225,5 +234,6 @@ module.exports.setup = function (cb) {
 		u8: u8,
 		asm: Module.asm,
 		memsize: memsize,
+		env: env,
 	})
 };
