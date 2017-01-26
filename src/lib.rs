@@ -98,6 +98,8 @@ extern {
 	pub fn creep_move(cndx: u16, dir: u8);
 	pub fn write32(addr: usize, val: u32);
 	pub fn read32(addr: usize) -> u32;
+	pub fn write8(addr: usize, val: u8);
+	pub fn read8(addr: usize) -> u8;
 	pub fn debugmark(val: usize);
 }
 
@@ -107,26 +109,36 @@ extern {
 // Screeps as a binary string.
 
 #[no_mangle]
-pub extern fn __allocate(size: usize, _align: usize) -> *mut u8 {
+pub extern fn __allocate(mut size: usize, _align: usize) -> *mut u8 {
 	unsafe {
 		// TODO: implement alignment by overallocation if needed
 		let regionoff: u32 = read32(0);
 		let regionsize: u32 = read32(4);
 		let mut loff = 0;
 
+		// _Must_ have 4 byte alignment for chunks.
+		if size & 3 > 0 {
+			//debugmark(9999);
+			size = ((size >> 2) << 2) + 4;
+		}
+
 		while (true) {
 			let chunkflags: u32 = read32((regionoff + 0 + loff) as usize);
 			let chunksize: u32 = read32((regionoff + 4 + loff) as usize);
+
+			//debugmark(99);
+			//debugmark(chunkflags as usize);
+			//debugmark(chunksize as usize);
 
 			if chunkflags & (1 as u32) == 0 && chunksize as u32 >= size as u32 {
 				// The chunk is free.
 				if chunksize as u32 > size as u32 + 32u32 {
 					// Use a portion of the chunk.
-					write32((regionoff + 4u32 + loff) as usize, size as u32);
 					write32((regionoff + loff) as usize, 1u32);
+					write32((regionoff + 4u32 + loff) as usize, size as u32);
 					// Write the next header as unused and copy the last chunk bit flag.
-					write32((regionoff + 8u32 + size as u32 + 0u32) as usize, chunkflags & 2 as u32);
-					write32((regionoff + 8u32 + size as u32 + 4u32) as usize, chunksize - size as u32);
+					write32((regionoff + loff + 8u32 + size as u32 + 0u32) as usize, chunkflags & 2 as u32);
+					write32((regionoff + loff + 8u32 + size as u32 + 4u32) as usize, (chunksize - size as u32 - 8 as u32) as u32);
 				} else {
 					// Use the entire chunk, therefore, leave everything as is. Also,
 					// copy the last chunk bit flag.
@@ -150,13 +162,53 @@ pub extern fn __allocate(size: usize, _align: usize) -> *mut u8 {
 }
 
 #[no_mangle]
-pub extern fn __rust_deallocate(ptr: *mut u8, _old_size: usize, _align: usize) {
+pub extern fn __deallocate(ptr: *mut u8, _old_size: usize, _align: usize) {
+	let hdr = ptr as usize - 8;
+	unsafe {
+		let flags = read32(hdr);
 
+		// Copy the last-chunk flag but clear the used flag.
+		write32(hdr, flags & 2);
+	}
+}
+
+unsafe fn memcpy(dst: *mut u8, src: *mut u8, size: usize) {
+	let chunks = size / 4;
+	let slack = size - (chunks * 4);
+	let q = 0usize;
+
+	for q in 0..chunks {
+		unsafe {
+			write32(dst as usize + q * 4, read32(src as usize + q * 4))
+		}
+	}
+
+	let off = chunks * 4;
+
+	for q in 0..slack {
+		unsafe {
+			write8(dst as usize + off + q, read8(src as usize + off + q));
+		}
+	}
 }
 
 #[no_mangle]
-pub extern fn __rust_reallocate(ptr: *mut u8, _old_size: usize, size: usize, _align: usize) -> *mut u8 {
-	0 as *mut u8
+pub extern fn __reallocate(ptr: *mut u8, _old_size: usize, size: usize, _align: usize) -> *mut u8 {
+	__deallocate(ptr, _old_size, _align);
+
+	let nptr = __allocate(size, _align);
+
+	if nptr as usize == 0 {
+		0 as *mut u8
+	} else {
+		if size > _old_size {
+			unsafe { memcpy(nptr, ptr, _old_size); }
+		} else {
+			unsafe { memcpy(nptr, ptr, size); }
+		}
+
+		nptr
+	}
 }
 
 #[no_mangle]
@@ -166,7 +218,7 @@ pub extern fn __rust_reallocate_inplace(_ptr: *mut u8, old_size: usize, _size: u
 
 #[no_mangle]
 pub extern fn __rust_usable_size(size: usize, _align: usize) -> usize {
-	0
+	size
 }
 
 #[no_mangle]

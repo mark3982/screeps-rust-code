@@ -75,6 +75,68 @@ var buf = new ArrayBuffer(memsize);
 module.exports = {};
 
 module.exports.run = function () {
+	module.exports.setup(function (opts) {
+		var heapstart = opts.heapstart;
+		var u32 = opts.u32;
+		var u8 = opts.u8;
+		var asm = opts.asm;
+
+		// The following encodes the data so that Rust can read
+		// and write it in native form instead of doing active
+		// marshalling of data. This performs one large marshall
+		// of the data.
+
+		//var creeps = Game.creeps;
+		var creeps = {
+			John: { hits: 100, hitsMax: 200 },
+			Mark: { hits: 200, hitsMax: 300 },
+		};
+
+		var ptr_cur = heapstart;
+
+		var creep_index_to_creep = {};
+
+		function make_struct_vector(ptr, ary, cb) {
+			var ndx = 0;
+
+			u32[ptr++] = (ptr << 2) + 12;
+
+			var szp = ptr;
+
+			for (var k in ary) {
+				ptr = cb(ptr, ary[k], ndx);
+				++ndx;
+			}
+
+			// The RawVec also has a capacity field.
+			u32[szp++] = ndx;
+			u32[szp++] = ndx;
+
+			return ptr;
+		}
+
+		function make_struct_creep(ptr, creep, ndx) {
+			u32[ptr++] = ndx;
+			u32[ptr++] = creep.hits;
+			u32[ptr++] = creep.hitsMax;
+			return ptr;
+		}
+
+		// Write the game structure into the heap memory.
+		ptr_cur = make_struct_vector(ptr_cur >> 2, creeps, make_struct_creep) << 2;
+
+		u32[0] = (ptr_cur >> 2) << 2;
+		u32[1] = ((memsize - ptr_cur) >> 2) << 2;
+
+		// Initialize the heap region to have one free chunk.
+		u32[u32[0] >> 2] = 0x2;
+		u32[(u32[0] >> 2) + 1] = u32[1];	
+
+		console.log('tick exit value', asm._game_tick(heapstart));
+	});
+}
+
+module.exports.setup = function (cb) {
 	var glb = {
 		Int32Array: Int32Array,
 		Int8Array: Int8Array,
@@ -99,6 +161,7 @@ module.exports.run = function () {
 
 	var u32 = new Uint32Array(buf);
 	var f32 = new Float32Array(buf);
+	var u8 = new Uint8Array(buf);
 
 	var env = {
 		STACKTOP: 256,
@@ -124,13 +187,24 @@ module.exports.run = function () {
 	// much. The read32 function simply makes the code look cleaner.
 	env._write32 = function (addr, val) {
 		// Force alignment.
+		//console.log('write32', addr, val);
 		u32[addr >> 2] = val;
 	}
 
 	env._read32 = function (addr) {
 		// Force alignment.
-		console.log('reading', addr);
+		//console.log('read32', addr, u32[addr >> 2]);
 		return u32[addr >> 2];
+	}
+
+	env._write8 = function (addr, val) {
+		// Force alignment.
+		u8[addr] = val;
+	}
+
+	env._read8 = function (addr) {
+		// Force alignment.
+		return u8[addr];
 	}
 
 	env._debugmark = function (val) {
@@ -142,60 +216,14 @@ module.exports.run = function () {
 	// is just a make it work hack.
 	Module.asm = asm(glb, env, buf);
 	env.___rust_allocate = Module.asm.___allocate;
+	env.___rust_deallocate = Module.asm.___deallocate;
 	Module.asm = asm(glb, env, buf);
 
-	// The following encodes the data so that Rust can read
-	// and write it in native form instead of doing active
-	// marshalling of data. This performs one large marshall
-	// of the data.
-
-	//var creeps = Game.creeps;
-	var creeps = {
-		John: { hits: 100, hitsMax: 200 },
-		Mark: { hits: 200, hitsMax: 300 },
-	};
-
-	var ptr_cur = heapstart;
-
-	var creep_index_to_creep = {};
-
-	function make_struct_vector(ptr, ary, cb) {
-		var ndx = 0;
-
-		u32[ptr++] = (ptr << 4) + 12;
-
-		var szp = ptr;
-
-		for (var k in ary) {
-			ptr = cb(ptr, ary[k], ndx);
-			++ndx;
-		}
-
-		// The RawVec also has a capacity field.
-		u32[szp++] = ndx;
-		u32[szp++] = ndx;
-
-		return ptr;
-	}
-
-	function make_struct_creep(ptr, creep, ndx) {
-		u32[ptr++] = ndx;
-		u32[ptr++] = c.hits;
-		u32[ptr++] = c.hitsMax;
-		return ptr;
-	}
-
-	// Write the game structure into the heap memory.
-	ptr_cur = make_struct_vector(ptr_cur, creeps, make_struct_creep);
-
-	u32[0] = (ptr_cur >> 2) << 2;
-	u32[1] = ((memsize - ptr_cur) >> 2) << 2;
-
-	// Initialize the heap region to have one free chunk.
-	u32[u32[0] >> 2] = 0x2;
-	u32[(u32[0] >> 2) + 1] = u32[1];	
-
-	console.log('tick exit value', Module.asm._game_tick(heapstart));
+	cb({
+		heapstart: heapstart,
+		u32: u32,
+		u8: u8,
+		asm: Module.asm,
+		memsize: memsize,
+	})
 };
-
-module.exports.run();

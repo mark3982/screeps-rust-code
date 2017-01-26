@@ -35,7 +35,7 @@ def check_env():
 def build(inp, outp, md):
 	print '------ building ------'
 	subprocess.check_call('cargo build%s --target asmjs-unknown-emscripten' % md, shell=True) # --emit llvm-ir --crate-type lib test.rs
-	subprocess.call('emcc --separate-asm -v %s -s NO_EXIT_RUNTIME=1 --bind -s STACK_OVERFLOW_CHECK=0 -s EXPORTED_FUNCTIONS="[\'_game_tick\', \'___allocate\']" -s ONLY_MY_CODE=1 --separate-asm -s SWAPPABLE_ASM_MODULE=1 -O3' % inp, shell=True)
+	subprocess.call('emcc --separate-asm -v %s -s NO_EXIT_RUNTIME=1 --bind -s STACK_OVERFLOW_CHECK=0 -s EXPORTED_FUNCTIONS="[\'_game_tick\', \'___allocate\', \'___deallocate\']" -s ONLY_MY_CODE=1 --separate-asm -s SWAPPABLE_ASM_MODULE=1 -O3' % inp, shell=True)
 
 	try:
 		os.mkdir('./output')
