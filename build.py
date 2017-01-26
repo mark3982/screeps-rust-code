@@ -54,6 +54,6 @@ def main():
 	if check_env() is False:
 		return
 
-	build('./target/asmjs-unknown-emscripten/release/librust_screeps_code.rlib', './rust')
+	build('./target/asmjs-unknown-emscripten/release/libscreeps_rust_code.rlib', './rust')
 
 main()
