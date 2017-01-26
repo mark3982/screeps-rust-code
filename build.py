@@ -20,14 +20,17 @@ def modifyasm(fin, fout):
 
 def check_env():
 	print '------ checking environment -------'
-	def check(cmd):
+	def check(cmd, msg):
+		success = True
 		try:
 			subprocess.check_call(cmd, shell=True)
-		except Exception as e:
-			print 'The emscripten executable emcc could not be properly executed. Check `emcc`.'
-			return False
+		except subprocess.CalledProcessError as e:
+			print msg
+			success = False
 
-	return check('emcc -v') and check('cargo --version')
+		return success
+
+	return check('emcc -v', 'Could not execute emcc (Emscripten).') and check('cargo --version', 'Could not execute cargo (Rust).')
 
 def build(inp, outp):
 	print '------ building ------'
