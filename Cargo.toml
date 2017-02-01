@@ -5,3 +5,4 @@ authors = ["Kevin McGuire <kmcg3413@gmail.com>"]
 publish = false
 
 [dependencies]
+rand = "*"
