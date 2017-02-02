@@ -1,3 +1,8 @@
+/// Static sized vector. Will not automatically resize. Will panic
+/// if more items than capacity are pushed and shall panic if bad
+/// index is accessed.
+///
+/// Use DyVec for a dynamic sized vector.
 use core;
 use super::ffi;
 use super::heap;
@@ -10,15 +15,6 @@ pub struct Vec<T> {
 }
 
 impl<T> Vec<T> {
-	pub fn new() -> Vec<T> {
-		Vec {
-			ptr: 0,
-			capacity: 0,
-			count: 0,
-			phantom: core::marker::PhantomData,
-		}
-	}
-
 	pub fn with_capacity(count: usize) -> Vec<T> {
 		unsafe {
 			let ptr = heap::__allocate(
@@ -40,8 +36,18 @@ impl<T> Vec<T> {
 	}
 
 	pub fn push(&mut self, v: T) {
+		if self.count == self.capacity {
+			ffi::panic();
+		}
+
 		let is = core::mem::size_of::<T>();
 		let addr = self.ptr + is * self.count;
+
+		unsafe {
+			*(addr as *mut T) = v;
+		}
+
+		self.count = self.count + 1;
 	}	
 }
 

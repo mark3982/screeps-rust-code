@@ -1,7 +1,6 @@
 #![feature(start, nostd)]
 #![no_main]
 #![no_std]
-pub mod fmemseg;
 pub mod room;
 pub mod creep;
 pub mod structure;
@@ -19,6 +18,7 @@ pub use core::mem;
 mod ffi {
 	use core;
 	use super::creep;
+	use super::Memkey;
 
 	extern {
 		pub fn get_heap_region_off() -> u32;
@@ -29,6 +29,7 @@ mod ffi {
 		pub fn creep_harvest(cid: u32, sid: u32) -> i32;
 		pub fn creep_moveto(cid: u32, tid: u32) -> i32;
 		pub fn creep_upgrade_controller(cid: u32, tid: u32) -> i32;
+		pub fn creep_transfer(cid: u32, tid: u32) -> i32;
 
 		// Creep Memory
 		pub fn _creep_mem_write(cid: u32, key: u32, data: *const u8, data_size: usize);
@@ -55,7 +56,7 @@ mod ffi {
 		pub fn _debugmark(val: u32);
 
 		/// Room
-		pub fn room_enumerate(id: u32) -> &super::room::Enumeration;
+		pub fn room_enumerate(id: u32) -> &'static super::room::Enumeration;
 	}
 
 	pub fn write32(addr: usize, val: u32) {
@@ -73,9 +74,9 @@ mod ffi {
 	/// Writes the binary representation of `v` into a key in the creep's
 	/// memory; however, it requires that `T` of `v` be Copy (byte for byte)
 	/// to make the operation safe.
-	pub fn creep_mem_write<T: Copy>(cid: u32, key: u32, v: T) {
+	pub fn creep_mem_write<T: Copy>(cid: u32, key: Memkey, v: T) {
 		unsafe {
-			_creep_mem_write(cid, key, core::mem::transmute::<&T, *const u8>(&v), core::mem::size_of::<T>());
+			_creep_mem_write(cid, key.to_u32(), core::mem::transmute::<&T, *const u8>(&v), core::mem::size_of::<T>());
 		}
 	}
 
@@ -87,14 +88,14 @@ mod ffi {
 
 	/// Reads the binary representation of `v` from a key in the creep's
 	/// memory.
-	pub fn creep_mem_read<T: Copy>(cid: u32, key: u32) -> Option<T> {
+	pub fn creep_mem_read<T: Copy>(cid: u32, key: Memkey) -> Option<T> {
 		unsafe {
 			let mut v: T = core::mem::uninitialized();
 
-			if creep_mem_key_exist(cid, key, core::mem::size_of::<T>()) == false {
+			if creep_mem_key_exist(cid, key.to_u32(), core::mem::size_of::<T>()) == false {
 				Option::None
 			} else {
-				_creep_mem_read(cid, key, core::mem::transmute::<&mut T, *mut u8>(&mut v), core::mem::size_of::<T>());
+				_creep_mem_read(cid, key.to_u32(), core::mem::transmute::<&mut T, *mut u8>(&mut v), core::mem::size_of::<T>());
 				Option::Some(v)
 			}
 		}
@@ -157,57 +158,220 @@ impl ActionResult {
 }
 
 pub struct Game {
-	creeps: Vec<Creep>,
+	creeps: Vec<Option<Creep>>,
+}
+
+pub struct GatherAndWorkCreep {
+	pub creep: Creep,
+}
+
+pub enum Memkey {
+	Gathering,
+	Role,
+	SubRole,
+}
+
+impl Memkey {
+	pub fn to_u32(&self) -> u32 {
+		match self {
+			&Memkey::Gathering => 0,
+			&Memkey::Role => 1,
+			&Memkey::SubRole => 2,
+		}
+	}
+}
+
+impl GatherAndWorkCreep {
+	pub fn new(creep: Creep) -> GatherAndWorkCreep {
+		GatherAndWorkCreep {
+			creep: creep,
+		}
+	}
+
+	/// Use energy from source specified to perform the upgrade 
+	/// controller operation on the target specified.
+	///
+	/// A fast code-path for performing the action.
+	pub fn action_upgrade(&self, source: u32, target: u32) -> ActionResult {
+		let creep = &self.creep;
+
+		let gathering = creep.mem_read::<u8>(Memkey::Gathering).unwrap_or(0);
+
+		if gathering == 0 && creep.carry_energy == 0 {
+			creep.mem_write::<u8>(Memkey::Gathering, 1);
+		}
+
+		if gathering == 1 && creep.carry_energy == creep.carry_capacity {
+			creep.mem_write::<u8>(Memkey::Gathering, 0);
+		}
+
+		if gathering == 1 {
+			match creep.harvest(source) {
+				ActionResult::NotInRange => { creep.moveto(source); },
+				_ => (),
+			}
+		} else {
+			match creep.upgrade_controller(target) {
+				ActionResult::NotInRange => { creep.moveto(target); },
+				_ => (),
+			};
+		}
+
+		ActionResult::OK
+	}
+
+	pub fn action_transfer(&self, source: u32, target: u32) -> ActionResult {
+		let creep = &self.creep;
+
+		let gathering = creep.mem_read::<u8>(Memkey::Gathering).unwrap_or(0);
+
+		if gathering == 0 && creep.carry_energy == 0 {
+			creep.mem_write::<u8>(Memkey::Gathering, 1);
+		}
+
+		if gathering == 1 && creep.carry_energy == creep.carry_capacity {
+			creep.mem_write::<u8>(Memkey::Gathering, 0);
+		}
+
+		if gathering == 1 {
+			match creep.harvest(source) {
+				ActionResult::NotInRange => { creep.moveto(source); },
+				_ => (),
+			}
+		} else {
+			match creep.transfer(target) {
+				ActionResult::NotInRange => { creep.moveto(target); },
+				_ => (),
+			};
+		}
+
+		ActionResult::OK
+	}
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum Role {
+	SourceMiner,
+	SourceHauler,
+	BaseFueling,
+	SourceMinerAndHauler,
+	None,
+}
+
+impl Role {
+	pub fn to_u32(&self) -> u32 {
+		match self {
+			&Role::SourceMiner => 0,
+			&Role::SourceHauler => 1,
+			&Role::BaseFueling => 2,
+			&Role::SourceMinerAndHauler => 3,
+			&Role::None => 4,
+		}
+	}
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum SubRole {
+	None,
+}
+
+impl SubRole {
+	pub fn to_u32(&self) -> u32 {
+		match self {
+			&SubRole::None => 0,
+		}
+	}
+}
+
+mod spawner {
+	use super::Game;
+	use super::creep;
+	use super::Role;
+	use super::SubRole;
+	use super::vec::Vec;
+	use super::Memkey;
+
+	pub struct Spawner {
+		bque: Vec<(Vec<creep::BodyPart>, Role, SubRole)>,
+	}
+
+	impl Spawner {
+		pub fn get_creep(&mut self, game: &mut Game, bodyparts: &[creep::BodyPart], role: Role, subrole: SubRole) -> Option<creep::Creep> {
+			let mut ndx: Option<usize> = Option::None;
+
+			for q in 0..game.creeps.len() {
+				if game.creeps[q].is_none() {
+					continue;
+				}
+
+				{
+					let creep = game.creeps[q].as_ref().unwrap();
+
+					if creep.mem_read::<Role>(Memkey::Role).unwrap_or(Role::None) == role {
+						if creep.mem_read::<SubRole>(Memkey::SubRole).unwrap_or(SubRole::None) == subrole {
+							ndx = Option::Some(q);
+							break;							
+						}
+					}
+				}
+			}
+
+			match ndx {
+				Option::Some(ndx) => Option::Some(game.creeps[ndx].take().unwrap()),
+				Option::None => {
+					// Queue the building of the creep that is needed.
+					let mut n: Vec<creep::BodyPart> = Vec::with_capacity(50);
+
+					for q in 0..bodyparts.len() {
+						n.push(bodyparts[q]);
+					}
+
+					self.bque.push((n, role, subrole));
+
+					Option::None
+				},
+			}
+		}
+	}
 }
 
 #[no_mangle]
-pub extern fn game_tick(game: &Game) -> u32 {
+pub extern fn game_tick(game: &mut Game) -> u32 {
 	let mut a: u32 = 0;
 
-	let mut r = pcg::PcgRng::new_unseeded();
+	if game.creeps.len() < 12 {
+		// Keep a specific number of creeps built.
+		let bps: [creep::BodyPart; 3] = [
+			creep::BodyPart::Move,
+			creep::BodyPart::Carry,
+			creep::BodyPart::Work,
+		];
 
-	// Keep a specific number of creeps built.
-	let bps: [creep::BodyPart; 3] = [
-		creep::BodyPart::Move,
-		creep::BodyPart::Carry,
-		creep::BodyPart::Work,
-	];
-
-	if game.creeps.len() < 3 {
 		unsafe { ffi::spawn_build(&bps) };
 	}
 
 	// Make the creeps do something useful.
-	for q in 0..game.creeps.len() {
-		let ref creep = game.creeps[q];
+	let mut q = 0;
 
-		let gathering = ffi::creep_mem_read::<u8>(creep.id, 0).unwrap_or(0);
+	if game.creeps.len() > 0 {
+		let renum = game.creeps[0].as_ref().unwrap().room.enumerate();
 
-		if gathering == 0 && creep.carry_energy == 0 {
-			ffi::creep_mem_write::<u8>(creep.id, 0, 1);
+		while (q < game.creeps.len() && q < 1) {
+			let creep = GatherAndWorkCreep::new(game.creeps[q].take().unwrap());	
+			creep.action_transfer(renum.sources[0].id, renum.spawns[0].get_structure().get_id());
+			q += 1;
 		}
 
-		if gathering == 1 && creep.carry_energy == creep.carry_capacity {
-			ffi::creep_mem_write::<u8>(creep.id, 0, 0);
+		while (q < game.creeps.len() && q < 4) {
+			let creep = GatherAndWorkCreep::new(game.creeps[q].take().unwrap());
+			creep.action_upgrade(renum.sources[1].id, renum.controller);
+			q += 1;
 		}
 
-		let renum = creep.room.enumerate();
-
-		//rand::thread_rng().choose(&renum.sources);
-		if gathering == 1 {
-			// Gathering
-			let rsrcndx = r.next_u32() % renum.sources.len() as u32;
-			let slid = renum.sources[rsrcndx as usize].id;
-			match creep.harvest(slid) {
-				ActionResult::NotInRange => { creep.moveto(slid); },
-				_ => (),
-			}
-		} else {
-			// Working
-			match creep.upgrade_controller(renum.controller) {
-				ActionResult::NotInRange => { creep.moveto(renum.controller); },
-				_ => (),
-			};
+		while (q < game.creeps.len() && q < 20) {
+			let creep = GatherAndWorkCreep::new(game.creeps[q].take().unwrap());
+			creep.action_upgrade(renum.sources[0].id, renum.controller);
+			q += 1;
 		}
 	}
 

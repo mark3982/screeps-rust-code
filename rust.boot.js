@@ -125,10 +125,8 @@ var id_to_object = [];
 var unlocid = 0;
 
 function get_id_for_object(obj) {
-	var id = unlocid++;
-
+	var id = id_to_object.length;
 	id_to_object.push(obj);
-
 	return id;
 }
 
@@ -136,6 +134,33 @@ if (Game.cpu.bucket < 50) {
 	console.log('cpu bucket too little');
 	module.exports.run = function () { };
 	return;
+}
+
+function room_name_to_guid32(rname) {
+	var ew = rname[0];
+	var ns = rname[3];
+	var ew0 = rname.charCodeAt(1);
+	var ew1 = rname.charCodeAt(2);
+	var ns0 = rname.charCodeAt(4);
+	var ns1 = rname.charCodeAt(5);
+
+	var a = (ew0 - 48);
+	var b = (ew1 - 48);
+	var c = (ns0 - 48);
+	var d = (ns1 - 48);
+
+	a = a << (7 * 3);
+	b = b << (7 * 2);
+	c = c << (7 * 1);
+	d = d;
+
+	let e = ew == 'E' ? 0 : 1;
+	let f = ns == 'N' ? 0 : 1;
+
+	e = e << (7 * 4);
+	f = f << (7 * 4 + 1);
+
+	return a | b | c | d | e | f;
 }
 
 module.exports.run = function () {
@@ -146,11 +171,12 @@ module.exports.run = function () {
 	g_room_enumerate_pointers = {};
 
 	let heapstart = 1024 * 1024 * 2;
-	g_u32[0] = heapstart;
-	g_u32[1] = ((memsize - heapstart) >> 2) << 2;	
 
-	g_u32[g_u32[0] >> 2] = 0x2;
-	g_u32[(g_u32[0] >> 2) + 1] = g_u32[1];
+	g_u32[1] = heapstart;
+	g_u32[2] = memsize - heapstart;
+
+	g_u32[g_u32[1] >> 2] = 0x2;
+	g_u32[(g_u32[1] >> 2) + 1] = g_u32[1];
 
 	// The following encodes the data so that Rust can read
 	// and write it in native form instead of doing active
@@ -165,12 +191,12 @@ module.exports.run = function () {
 		++cnt;
 	}
 
-	var gameobj = g_asm.___allocate(12) | 0;
-	var data = g_asm.___allocate(cnt * 4 * 6, 1) | 0;
+	let gameobj = g_asm.___allocate(12) | 0;
+	let data = g_asm.___allocate(cnt * 4 * 8, 1) | 0;
 
 	console.log('used-cpu-after-alloc', avgk('rust-after-alloc', Game.cpu.getUsed()));
 
-	var tmp = gameobj >> 2;
+	let tmp = (gameobj >> 2) | 0;
 
 	g_u32[tmp++] = data | 0;
 	g_u32[tmp++] = cnt | 0;
@@ -178,12 +204,22 @@ module.exports.run = function () {
 
 	data = (data | 0) >> 2;
 
-	for (var q in creeps) {
-		var creep = creeps[q];
-		g_u32[data++] = get_id_for_object(creep) | 0;
+	let id;
+
+	// Option<creep::Creep>
+	for (let q in creeps) {
+		let creep = creeps[q];
+		g_u32[data++] = 1;
+		id = id_to_object.length | 0;
+		id_to_object.push(creep);
+		g_u32[data++] = id | 0;
 		g_u32[data++] = creep.hits | 0;
 		g_u32[data++] = creep.hitsMax | 0;
-		g_u32[data++] = get_id_for_object(creep.room) | 0;
+		// structure::Room
+		id = id_to_object.length | 0;
+		id_to_object.push(creep.room);		
+		g_u32[data++] = id | 0;
+		g_u32[data++] = 0; //room_name_to_guid32(creep.room.name) | 0;
 		g_u32[data++] = creep.carry.energy | 0;
 		g_u32[data++] = creep.carryCapacity | 0;
 	}
@@ -427,34 +463,32 @@ module.exports.setup(function (opts) {
 		return -10;
 	}
 
+	env.__ZN4core9panicking5panic17hcb48c02563cd769eE = function () {
+		throw Error('rust panic');
+	}
+
 	env._creep_upgrade_controller = function (cid, tid) {
 		let st = Game.cpu.getUsed();
-		//console.log('_creep_upgrade_controller', cid, tid);
 		let res = id_to_object[cid].upgradeController(id_to_object[tid]);
-		let et = Game.cpu.getUsed();
-		//console.log('upgrade-cpu', et - st);		
+		return res;
+	}
+
+	env._creep_transfer = function (cndx, tid) {
+		let res = id_to_object[cndx].transfer(id_to_object[tid], RESOURCE_ENERGY);
+		return res;
 	}
 
 	env._creep_harvest = function (cndx, tid) {
-		let st = Game.cpu.getUsed();
 		let res = id_to_object[cndx].harvest(id_to_object[tid]);
-		//console.log('_creep_harvest', id_to_object[cndx], tid, res);
-		let et = Game.cpu.getUsed();
-		//console.log('harvest-cpu', et - st);
 		return res;
 	}
 
 	env._creep_moveto = function (cid, tid) {
-		let st = Game.cpu.getUsed();
-		//console.log('_creep_moveto', tid, id_to_object[tid]);
 		let res = id_to_object[cid].moveTo(id_to_object[tid]);
-		let et = Game.cpu.getUsed();
-		//console.log('moveto-cpu', et - st);
 		return res;
 	}
 
 	env._creep_move = function (cndx, dir) {
-		//console.log('creep move', cndx, dir, id_to_object[cndx]);
 		id_to_object[cndx].move(dir);
 	};		
 
@@ -467,9 +501,10 @@ module.exports.setup(function (opts) {
 
 		if (g_room_enumerate_pointers[room.name] === undefined) {
 			var sources = room.find(FIND_SOURCES);
+			var structs = room.find(FIND_MY_STRUCTURES);
 
-			let addr = env.___rust_allocate(4 * 4, 1); 
-			let data = env.___rust_allocate(sources.length * 4, 1) >> 2;
+			let addr = env.___rust_allocate(4 * 7, 1); 
+			let data = env.___rust_allocate(sources.length * 4 * 4, 1) >> 2;
 
 			g_room_enumerate_pointers[room.name] = addr;
 
@@ -486,6 +521,30 @@ module.exports.setup(function (opts) {
 				u32[data++] = sources[q].energyCapacity;
 				u32[data++] = sources[q].ticksToRegenerate;
 			}
+
+			let spawns_col = [];
+
+			for (let q = 0; q < structs.length; ++q) {
+				let s = structs[q];
+
+				if (s.structureType === STRUCTURE_SPAWN) {
+					spawns_col.push(s);
+				}
+			}
+
+			data = env.___rust_allocate(3 * spawns_col.length, 1) >> 2;
+
+			u32[addr++] = data << 2;
+			u32[addr++] = spawns_col.length;
+			u32[addr++] = spawns_col.length;
+
+			for (let q = 0; q < spawns_col.length; ++q) {
+				let s = spawns_col[q];
+				u32[data++] = get_id_for_object(s);
+				u32[data++] = s.hits;
+				u32[data++] = s.hitsMax;
+			}
+
 		}
 		
 		return g_room_enumerate_pointers[room.name];

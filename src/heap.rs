@@ -22,8 +22,9 @@ pub extern fn __heap_region(addr: usize, size: usize) {
 pub extern fn __allocate(mut size: usize, _align: usize) -> *mut u8 {
 	unsafe {
 		// TODO: implement alignment by overallocation if needed
-		let regionoff: u32 = ffi::get_heap_region_off();
-		let regionsize: u32 = ffi::get_heap_region_size();
+		let regionoff: u32 = ffi::read32(4);
+		let regionsize: u32 = ffi::read32(8);
+
 		let mut loff = 0;
 
 		// _Must_ have 4 byte alignment for chunks.

@@ -20,10 +20,11 @@ pub enum StructureTypeCode {
 	Nuker,
 }
 
+#[repr(C)]
 pub struct Structure {
+	id: u32,
 	hits: u32,
 	hits_max: u32,
-	id: u32,
 }
 
 impl Structure {
@@ -38,23 +39,30 @@ impl Structure {
 	}
 }
 
-pub struct StructureSpawn {
+#[repr(C)]
+pub struct Spawn {
+	structure: Structure,
+}
+
+impl Spawn {
+	pub fn get_structure(&self) -> &Structure {
+		&self.structure
+	}
+}
+
+pub struct Extension {
 	pub structure: Structure,
 }
 
-pub struct StructureExtension {
+pub struct Road {
 	pub structure: Structure,
 }
 
-pub struct StructureRoad {
-	pub structure: Structure,
-}
-
-pub struct StructureWall {
+pub struct Wall {
 	pub structure: Structure,	
 }
 
-pub struct StructureRampart {
+pub struct Rampart {
 	pub structure: Structure,
 }
 
