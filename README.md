@@ -5,12 +5,21 @@ A skeleton framework for writing a script for Screeps in Rust. Can be used on co
 
 Alpha; Likely broke. The current state is brand new. It is likely broken. Missing critical features.
 
+## Cavets
+
+Rust is a system level language. It is intended to operate fluidly without the standard library and normal operating system services; however, for some that comes as a surprise. It feels unnatural but because of that Rust is actually very easy to use with Screeps in conjunction with Emscripten without being excessively problematic.
+
+The standard library can be used but in this build has been excluded. The reasoning is that Screeps itself is a platform _but_ its not a common platform. Screeps as a platform is memory limited, CPU limited, functionality, and storage limited in severe ways. Therefore, much like developing for an embedded device so is developing for Screeps if you want to stay on par with pure Javascript code.
+
+The libc library _is intended to be excluded_ to reduce the code size; however, it has note. Read more to understand.
+
+_A special patch to Emscripten was needed to exclude libc and friends without excluding the special code that Emscripten emits. The only way to exclude libc by default is with `-s ONLY_MY_CODE=1` and that also prevents the special functions from being emitted. By default, this build will include libc._
+
+Just like Screeps is a type of embedded platform it makes sense that libc and friends are overkill for what is needed.
+
 ## Missing Features
 
-There is no heap allocation and deallocation routines. The libc library has been excluded to reduce the code size. There are
-also likely other missing features such as proper handling of panics and printing of output. I believe these can all be implemented
-more efficiently by leveraging the specifics of the environment provided by Screeps rather than attemping to bolt libc and
-friends onto and exploding the code size.
+Most of the standard library is missing. Only features included are a minimal and sometimes awkwardly implemented equivilents that help to encourage the writing of performance code.
 
 ## How to Use
 
@@ -38,6 +47,7 @@ How your Screeps development environment is setup will dictate how you get those
 however, once uploaded you need to, if not existing already, create a file with the main loop in it then require the `rust.boot.js` as a 
 a module. You code would look like this:
 
+_This file is now included in the output directory._
 ```
 var rust = require('rust.boot');
 
@@ -51,5 +61,4 @@ module.exports.loop = function() {
 }
 ```
 
-This allows you to leverage Rust code in your existing codebase. You just need to integrate the upload of
-the `rust.boot.js` and `rust.asm.js` files into your current Screep's project.
+This allows the leveraging of Rust code in your existing codebase. You just need to integrate the upload of the `rust.boot.js` and `rust.asm.js` files into your current Screep's project. _Beware of the existing `main.js` file that has been recently included._
