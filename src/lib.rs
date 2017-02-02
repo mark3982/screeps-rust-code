@@ -39,8 +39,9 @@ mod ffi {
 		pub fn spawn_build(bodyparts: &[creep::BodyPart]);
 
 		/// Helper functions for BAD Emscripten.
-		pub fn write32(addr: usize, val: u32);
-		pub fn read32(addr: usize) -> u32;
+		//pub fn write32(addr: usize, val: u32);
+		//pub fn read32(addr: usize) -> u32;
+
 		pub fn write8(addr: usize, val: u8);
 		pub fn read8(addr: usize) -> u8;
 
@@ -55,6 +56,18 @@ mod ffi {
 
 		/// Room
 		pub fn room_enumerate(id: u32) -> &super::room::Enumeration;
+	}
+
+	pub fn write32(addr: usize, val: u32) {
+		unsafe {
+			*(addr as *mut u32) = val;
+		}
+	}
+
+	pub fn read32(addr: usize) -> u32 {
+		unsafe {
+			*(addr as *const u32)
+		}
 	}
 
 	/// Writes the binary representation of `v` into a key in the creep's
