@@ -1,6 +1,7 @@
 var rust = require('./rust.boot.js');
 
 
+/*
 rust.setup(function (opts) {
 	var asm = opts.asm;
 	var u32 = opts.u32;
@@ -18,8 +19,11 @@ rust.setup(function (opts) {
 
 
 	// Do a light test of the heap.
-	heap_test(asm, 1024 * 10);
+	heap_test(asm, 256);
 });
+*/
+
+rust.run();
 
 /**
 	Do a stress test of the heap in an attempt to break it. This

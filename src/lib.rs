@@ -54,7 +54,7 @@ mod ffi {
 		pub fn _debugmark(val: u32);
 
 		/// Room
-		pub fn room_enumerate(id: u32, e: &mut super::room::Enumeration);
+		pub fn room_enumerate(id: u32) -> &super::room::Enumeration;
 	}
 
 	/// Writes the binary representation of `v` into a key in the creep's

@@ -20,19 +20,9 @@ pub struct Enumeration {
 }
 
 impl Room {
-	pub fn enumerate(&self) -> Enumeration {
-		let mut e;
-
+	pub fn enumerate(&self) -> &Enumeration {
 		unsafe {
-			// To simplify the FFI work it requires that the second
-			// argument point to the local space allocated for the
-			// enumeration and if needed the FFI will allocate additional
-			// heap space for the elements of the enumeration. Then
-			// the numeration when dropped will simply free that memory.
-			e = mem::uninitialized::<Enumeration>();
-			ffi::room_enumerate(self.id, &mut e);
+			ffi::room_enumerate(self.id)
 		}
-
-		e
 	}
 }

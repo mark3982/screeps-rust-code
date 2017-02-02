@@ -81,7 +81,6 @@ Module["dynCall_i"] = function() {
 };
 
 Module["dynCall_ii"] = function() {
-	console.log(Module.asm);
 	return Module["asm"]["dynCall_ii"].apply(null, arguments)
 };
 
@@ -120,14 +119,15 @@ module.exports = {};
 var run_func = null;
 var g_asm = null;
 var g_u32 = null;
+var g_room_enumerate_pointers = null;
 
-var id_to_object = {};
+var id_to_object = [];
 var unlocid = 0;
 
 function get_id_for_object(obj) {
 	var id = unlocid++;
 
-	id_to_object[id] = obj;
+	id_to_object.push(obj);
 
 	return id;
 }
@@ -141,8 +141,9 @@ if (Game.cpu.bucket < 50) {
 module.exports.run = function () {
 	console.log('used-cpu-before-loop', avgk('before-loop', Game.cpu.getUsed()));
 
-	id_to_object = {};
+	id_to_object = [];
 	unlocid = 0;
+	g_room_enumerate_pointers = {};
 
 	let heapstart = 1024 * 1024 * 2;
 	g_u32[0] = heapstart;
@@ -164,13 +165,10 @@ module.exports.run = function () {
 		++cnt;
 	}
 
-	var gameobj = g_asm.___allocate(12);
+	var gameobj = g_asm.___allocate(12) | 0;
+	var data = g_asm.___allocate(cnt * 4 * 6, 1) | 0;
 
-	var data = g_asm.___allocate(cnt * 4 * 6, 1);
-
-	//console.log('gameobj', gameobj);
-	//console.log('data', data);
-	//console.log('creeps.length', cnt);
+	console.log('used-cpu-after-alloc', avgk('rust-after-alloc', Game.cpu.getUsed()));
 
 	var tmp = gameobj >> 2;
 
@@ -178,7 +176,7 @@ module.exports.run = function () {
 	g_u32[tmp++] = cnt | 0;
 	g_u32[tmp++] = cnt | 0;
 
-	data = data >> 2;
+	data = (data | 0) >> 2;
 
 	for (var q in creeps) {
 		var creep = creeps[q];
@@ -191,7 +189,7 @@ module.exports.run = function () {
 	}
 
 	console.log('used-cpu-before-rust', avgk('before-rust', Game.cpu.getUsed()));
-	console.log('tick exit value', run_func(gameobj));
+	run_func(gameobj);
 	console.log('used-cpu-after-rust', avgk('after-rust', Game.cpu.getUsed()));	
 }
 
@@ -327,16 +325,12 @@ module.exports.setup(function (opts) {
 	}
 
 	env.__memory_get_integer = function (path_addr, path_size) {
-		console.log('path_addr', path_addr);
-
 		var q = (path_addr - 8) | 0;
 		var p = [];
 
 		for (let x = 0; x < path_size; ++x) {
 			p.push(String.fromCharCode(u8[x+q]));
 		}
-
-		console.log('path_addr', p.join(''));
 
 		//var v = eval('Memory.' + path);
 		//console.log('v', v);
@@ -355,7 +349,7 @@ module.exports.setup(function (opts) {
 			s.push(String.fromCharCode(u8[data_addr + q]));
 		}
 
-		console.log('__creep_mem_write', cid, key, data_addr, data_size, s);
+		//console.log('__creep_mem_write', cid, key, data_addr, data_size, s);
 
 		c.memory[key] = s.join('');
 
@@ -379,15 +373,13 @@ module.exports.setup(function (opts) {
 			u8[data_addr + q] = m.charCodeAt(q);
 		}
 
-		console.log('__creep_mem_read', cid, key, data_addr, data_size);
+		//console.log('__creep_mem_read', cid, key, data_addr, data_size);
 
 		return 1;
 	}
 
 	env._creep_mem_key_exist = function (cid, key, data_size) {
 		var c = id_to_object[cid];
-
-		console.log('c=', c);
 
 		if (c.memory[key] === undefined) {
 			return 0;
@@ -417,8 +409,6 @@ module.exports.setup(function (opts) {
 			}
 		}
 
-		console.log('tparts', tparts);
-
 		// This is just a hack function. It is incomplete
 		// but intended to do something minimal.
 		var structs = Game.rooms.E88S18.find(FIND_MY_STRUCTURES);
@@ -426,12 +416,8 @@ module.exports.setup(function (opts) {
 		for (var q = 0; q < structs.length; ++q) {
 			var s = structs[q];
 
-			console.log('s', s);
-
 			if (s.structureType === STRUCTURE_SPAWN) {
-				console.log('YES??');
 				if (s.spawning === null) {
-					console.log('got spawn');
 					return s.createCreep(tparts);
 				}
 			}
@@ -442,52 +428,67 @@ module.exports.setup(function (opts) {
 	}
 
 	env._creep_upgrade_controller = function (cid, tid) {
-		console.log('_creep_upgrade_controller', cid, tid);
-		return id_to_object[cid].upgradeController(id_to_object[tid]);
+		let st = Game.cpu.getUsed();
+		//console.log('_creep_upgrade_controller', cid, tid);
+		let res = id_to_object[cid].upgradeController(id_to_object[tid]);
+		let et = Game.cpu.getUsed();
+		//console.log('upgrade-cpu', et - st);		
 	}
 
 	env._creep_harvest = function (cndx, tid) {
+		let st = Game.cpu.getUsed();
 		let res = id_to_object[cndx].harvest(id_to_object[tid]);
-		console.log('_creep_harvest', id_to_object[cndx], tid, res);
+		//console.log('_creep_harvest', id_to_object[cndx], tid, res);
+		let et = Game.cpu.getUsed();
+		//console.log('harvest-cpu', et - st);
 		return res;
 	}
 
 	env._creep_moveto = function (cid, tid) {
-		console.log('_creep_moveto', tid, id_to_object[tid]);
-		return id_to_object[cid].moveTo(id_to_object[tid]);
+		let st = Game.cpu.getUsed();
+		//console.log('_creep_moveto', tid, id_to_object[tid]);
+		let res = id_to_object[cid].moveTo(id_to_object[tid]);
+		let et = Game.cpu.getUsed();
+		//console.log('moveto-cpu', et - st);
+		return res;
 	}
 
 	env._creep_move = function (cndx, dir) {
-		console.log('creep move', cndx, dir, id_to_object[cndx]);
+		//console.log('creep move', cndx, dir, id_to_object[cndx]);
 		id_to_object[cndx].move(dir);
 	};		
 
 	env._room_enumerate = function (rid, addr) {
 		var room = id_to_object[rid];
 
-		console.log('room enumerate', rid, room);
-
-		var sources = room.find(FIND_SOURCES);
+		//console.log('room enumerate', rid, room);
 
 		var data;
 
-		//throw Error('here:' + sources.length);
+		if (g_room_enumerate_pointers[room.name] === undefined) {
+			var sources = room.find(FIND_SOURCES);
 
-		data = env.___rust_allocate(sources.length * 4) >> 2;
+			let addr = env.___rust_allocate(4 * 4, 1); 
+			let data = env.___rust_allocate(sources.length * 4, 1) >> 2;
 
-		addr = addr >> 2;
+			g_room_enumerate_pointers[room.name] = addr;
 
-		u32[addr++] = data << 2;
-		u32[addr++] = sources.length;
-		u32[addr++] = sources.length;
-		u32[addr++] = get_id_for_object(room.controller);
+			addr = addr >> 2;
 
-		for (var q = 0; q < sources.length; ++q) {
-			u32[data++] = get_id_for_object(sources[q]);
-			u32[data++] = sources[q].energy;
-			u32[data++] = sources[q].energyCapacity;
-			u32[data++] = sources[q].ticksToRegenerate;
+			u32[addr++] = data << 2;
+			u32[addr++] = sources.length;
+			u32[addr++] = sources.length;
+			u32[addr++] = get_id_for_object(room.controller);
+
+			for (var q = 0; q < sources.length; ++q) {
+				u32[data++] = get_id_for_object(sources[q]);
+				u32[data++] = sources[q].energy;
+				u32[data++] = sources[q].energyCapacity;
+				u32[data++] = sources[q].ticksToRegenerate;
+			}
 		}
+		
+		return g_room_enumerate_pointers[room.name];
 	};
 
 	asm = opts.build_with_env();
