@@ -2,6 +2,7 @@
 import subprocess
 import os
 import shutil
+import sys
 
 def transform_mem(fin, fout):
 
@@ -54,7 +55,6 @@ def check_env():
 			success = False
 
 		return success
-
 	return check('emcc -v', 'Could not execute emcc (Emscripten).') and check('cargo --version', 'Could not execute cargo (Rust).')
 
 def build(inp, outp, md, emop):
@@ -64,7 +64,9 @@ def build(inp, outp, md, emop):
 		emop = '0'
 
 	print '------ building ------'
-	subprocess.check_call('cargo build%s --target asmjs-unknown-emscripten' % md, shell=True) # --emit llvm-ir --crate-type lib test.rs
+	#os.environ['RUSTFLAGS'] = '-C target-feature="-sse -sse2 -sse3 -sse4.1 -sse4a -ssse3"]'
+	#subprocess.check_call('cargo build%s --target asmjs-unknown-emscripten' % md, shell=True) # --emit llvm-ir --crate-type lib test.rs
+	subprocess.check_call('rustc -O --crate-type rlib ./src/lib.rs -o ./libscreeps_rust_code.rlib --target asmjs-unknown-emscripten', shell=True)
 
 	exp = "['_game_tick', '___allocate', '___deallocate', '_bitshift64Lshr']"
 	eexp = "['setTempRet0', 'getTempRet0']"
@@ -97,7 +99,7 @@ def main(debug, emscripten_optimize):
 		sdir = 'release'
 
 	build(
-		'./target/asmjs-unknown-emscripten/%s/libscreeps_rust_code.rlib' % sdir, 
+		'./libscreeps_rust_code.rlib', # './target/asmjs-unknown-emscripten/%s/libscreeps_rust_code.rlib' % sdir, 
 		'./rust', 
 		md,
 		emscripten_optimize
