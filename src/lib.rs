@@ -1,6 +1,7 @@
-#![feature(start, nostd)]
-#![no_main]
+#![feature(core_intrinsics)]
+#![feature(start, nostd, alloc, heap_api)]
 #![no_std]
+
 pub mod room;
 pub mod creep;
 pub mod structure;
@@ -8,17 +9,21 @@ pub mod pcg;
 pub mod heap;
 pub mod vec;
 pub mod rc;
+pub mod spawner;
 
 pub use room::Room;
 pub use creep::Creep;
 pub use vec::Vec;
 pub use rc::Rc;
-pub use core::mem;
+use core::mem;
 
 mod ffi {
 	use core;
 	use super::creep;
 	use super::Memkey;
+	use super::structure;
+	use super::vec::Vec;
+	use super::room::Room;
 
 	extern {
 		pub fn get_heap_region_off() -> u32;
@@ -37,7 +42,11 @@ mod ffi {
 		pub fn creep_mem_key_exist(cid: u32, key: u32, data_size: usize) -> bool;
 
 		/// Non-busy spawn selection to build command.
+
+		#[deprecated]
 		pub fn spawn_build(bodyparts: &[creep::BodyPart]);
+
+		pub fn create_creep(spawnid: u32, spec: &structure::SpawnCreepSpec) -> i32;
 
 		/// Helper functions for BAD Emscripten.
 		//pub fn write32(addr: usize, val: u32);
@@ -49,26 +58,36 @@ mod ffi {
 		// Panic function.
 		pub fn _panic();
 
-		/// Memory accessors.
-		pub fn _memory_get_integer(path: *const u8, path_len: usize);
+		pub fn _print_string(path: *const u8, path_len: usize);
+		pub fn _print_i32(v: i32);
+		pub fn _print_eol();
 		
 		/// Fast debugging output.
 		pub fn _debugmark(val: u32);
 
-		/// Room
+		/// Room(s)
+		pub fn enumerate_rooms() -> &'static Vec<Room>;
 		pub fn room_enumerate(id: u32) -> &'static super::room::Enumeration;
 	}
 
-	pub fn write32(addr: usize, val: u32) {
-		unsafe {
-			*(addr as *mut u32) = val;
-		}
+	pub fn print_string(s: &str) {
+		unsafe { _print_string(s.as_ptr(), s.len()) }
 	}
 
-	pub fn read32(addr: usize) -> u32 {
-		unsafe {
-			*(addr as *const u32)
-		}
+	pub fn print_i32(v: i32) {
+		unsafe { _print_i32(v) }
+	}
+
+	pub fn print_eol() {
+		unsafe { _print_eol() }
+	}
+
+	pub unsafe fn write32(addr: usize, val: u32) {
+		*(addr as *mut u32) = val;
+	}
+
+	pub unsafe fn read32(addr: usize) -> u32 {
+		*(addr as *const u32)
 	}
 
 	/// Writes the binary representation of `v` into a key in the creep's
@@ -101,16 +120,20 @@ mod ffi {
 		}
 	}
 
+	#[cfg(target_family = "emscripten")]
 	pub fn panic() {
 		unsafe { _panic() }
 	}
 
-	pub fn memory_get_integer(path: &str) {
-		unsafe {
-			_memory_get_integer(path.as_ptr(), path.len());
-		}
-	}	
+	#[cfg(not(target_family = "emscripten"))]
+	pub fn panic() {
+		panic!("unspecified");
+	}
 }
+
+use ffi::print_string;
+use ffi::print_i32;
+use ffi::print_eol;
 
 pub enum ActionResult {
 	OK,
@@ -131,6 +154,7 @@ pub enum ActionResult {
 	RCLNotEnough,
 	GCLNotEnough,
 	Unknown,
+	InvalidRustProxyID,
 }
 
 impl ActionResult {
@@ -152,13 +176,14 @@ impl ActionResult {
 			-13 => ActionResult::NotEnoughExtensions,
 			-14 => ActionResult::RCLNotEnough,
 			-15 => ActionResult::GCLNotEnough,
+			-100 => ActionResult::InvalidRustProxyID,
 			_ => ActionResult::Unknown,
 		}
 	}
 }
 
 pub struct Game {
-	creeps: Vec<Option<Creep>>,
+	pub creeps: Vec<Option<Creep>>,
 }
 
 pub struct GatherAndWorkCreep {
@@ -169,6 +194,7 @@ pub enum Memkey {
 	Gathering,
 	Role,
 	SubRole,
+	Room,
 }
 
 impl Memkey {
@@ -177,6 +203,7 @@ impl Memkey {
 			&Memkey::Gathering => 0,
 			&Memkey::Role => 1,
 			&Memkey::SubRole => 2,
+			&Memkey::Room => 3,
 		}
 	}
 }
@@ -283,62 +310,74 @@ impl SubRole {
 	}
 }
 
-mod spawner {
-	use super::Game;
-	use super::creep;
-	use super::Role;
-	use super::SubRole;
-	use super::vec::Vec;
-	use super::Memkey;
+/// Handling room specific functions.
+pub fn game_tick_room(game: &mut Game, room: &Room) {
+	let mut spawner = spawner::Spawner::new(room.clone());
 
-	pub struct Spawner {
-		bque: Vec<(Vec<creep::BodyPart>, Role, SubRole)>,
-	}
+	print_string("room ");
+	print_i32(room.id as i32);
+	print_eol();
 
-	impl Spawner {
-		pub fn get_creep(&mut self, game: &mut Game, bodyparts: &[creep::BodyPart], role: Role, subrole: SubRole) -> Option<creep::Creep> {
-			let mut ndx: Option<usize> = Option::None;
+	/// Enumerate sources in the room.
+	let renum = room.enumerate();
 
-			for q in 0..game.creeps.len() {
-				if game.creeps[q].is_none() {
-					continue;
-				}
+	for q in 0..renum.sources.len() {
+		let source = &renum.sources[q];
 
-				{
-					let creep = game.creeps[q].as_ref().unwrap();
+		/// Use the spawner to get one or more creeps capable
+		/// of fully harvesting the source.
+		let creeps = spawner.get_creep(game, spawner::BodyPartSpec {
+			work: 6,
+			carry: 0,
+			claim: 0,
+			attack: 0,
+			rattack: 0,
+			heal: 0,
+			tough: 0,
+			offroad: true,
+			num: 2,
+		}, Role::SourceMiner, SubRole::None, -5.0);
 
-					if creep.mem_read::<Role>(Memkey::Role).unwrap_or(Role::None) == role {
-						if creep.mem_read::<SubRole>(Memkey::SubRole).unwrap_or(SubRole::None) == subrole {
-							ndx = Option::Some(q);
-							break;							
-						}
-					}
-				}
-			}
-
-			match ndx {
-				Option::Some(ndx) => Option::Some(game.creeps[ndx].take().unwrap()),
-				Option::None => {
-					// Queue the building of the creep that is needed.
-					let mut n: Vec<creep::BodyPart> = Vec::with_capacity(50);
-
-					for q in 0..bodyparts.len() {
-						n.push(bodyparts[q]);
-					}
-
-					self.bque.push((n, role, subrole));
-
-					Option::None
-				},
-			}
+		for w in 0..creeps.len() {
+			let creep = &creeps[w];
+			print_string("@@@@@creep ");
+			print_i32(w as i32);
+			print_eol();
 		}
+
+		print_string("source");
+		print_i32(source.id as i32);
+		print_eol();
 	}
+
+	spawner.action(game);
 }
 
+/// Entry function from Screeps.
 #[no_mangle]
 pub extern fn game_tick(game: &mut Game) -> u32 {
-	let mut a: u32 = 0;
+	print_string("hello world");
+	print_eol();
 
+	print_string("size_of debug ");
+	print_i32(core::mem::size_of::<Role>() as i32);
+	print_eol();
+
+	let rooms = Room::enumerate_rooms();
+
+	print_string("rooms.len()=");
+	print_i32(rooms.len() as i32);
+	print_eol();
+
+	for q in 0..rooms.len() {
+		let room = &rooms[q];
+		game_tick_room(game, room);
+	}
+	0
+}
+
+/// Obsolete function for development.
+pub fn game_tick_mine_and_upgrade(game: &mut Game) -> u32 {
 	if game.creeps.len() < 12 {
 		// Keep a specific number of creeps built.
 		let bps: [creep::BodyPart; 3] = [
@@ -356,19 +395,19 @@ pub extern fn game_tick(game: &mut Game) -> u32 {
 	if game.creeps.len() > 0 {
 		let renum = game.creeps[0].as_ref().unwrap().room.enumerate();
 
-		while (q < game.creeps.len() && q < 1) {
+		while q < game.creeps.len() && q < 1 {
 			let creep = GatherAndWorkCreep::new(game.creeps[q].take().unwrap());	
-			creep.action_transfer(renum.sources[0].id, renum.spawns[0].get_structure().get_id());
+			creep.action_transfer(renum.sources[0].id, renum.spawns[0].structure.id);
 			q += 1;
 		}
 
-		while (q < game.creeps.len() && q < 4) {
+		while q < game.creeps.len() && q < 4 {
 			let creep = GatherAndWorkCreep::new(game.creeps[q].take().unwrap());
 			creep.action_upgrade(renum.sources[1].id, renum.controller);
 			q += 1;
 		}
 
-		while (q < game.creeps.len() && q < 20) {
+		while q < game.creeps.len() && q < 20 {
 			let creep = GatherAndWorkCreep::new(game.creeps[q].take().unwrap());
 			creep.action_upgrade(renum.sources[0].id, renum.controller);
 			q += 1;
@@ -376,4 +415,9 @@ pub extern fn game_tick(game: &mut Game) -> u32 {
 	}
 
 	0
+}
+
+#[test]
+fn it_works() {
+
 }

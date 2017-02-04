@@ -9,6 +9,12 @@ pub extern fn __heap_region(addr: usize, size: usize) {
 	}
 }
 
+#[cfg(not(target_os = "emscripten"))]
+pub unsafe fn __allocate(size: usize, _align: usize) -> *mut u8 {
+	extern crate alloc;
+	alloc::heap::allocate(size, _align)
+}
+
 /// Returns the address of a chunk of memory that is of at least the size
 /// specified.
 ///
@@ -19,6 +25,7 @@ pub extern fn __heap_region(addr: usize, size: usize) {
 /// of the code is going to only use the heap for a few rounds before it is
 /// destroyed, therefore, no work is done to reduce heap segmentation.
 #[no_mangle]
+#[cfg(target_os = "emscripten")]
 pub extern fn __allocate(mut size: usize, _align: usize) -> *mut u8 {
 	unsafe {
 		// TODO: implement alignment by overallocation if needed
@@ -27,13 +34,14 @@ pub extern fn __allocate(mut size: usize, _align: usize) -> *mut u8 {
 
 		let mut loff = 0;
 
-		// _Must_ have 4 byte alignment for chunks.
+		// _Must_ have 4 byte alignment for chunks. By aligning
+		// the chunk size it also aligns the offset of every allocation
+		// since the headers are in four byte multiples.
 		if size & 3 > 0 {
-			//debugmark(9999);
 			size = ((size >> 2) << 2) + 4;
 		}
 
-		while (true) {
+		while true {
 			let chunkflags: u32 = ffi::read32((regionoff + 0 + loff) as usize);
 			let chunksize: u32 = ffi::read32((regionoff + 4 + loff) as usize);
 
@@ -73,6 +81,14 @@ pub extern fn __allocate(mut size: usize, _align: usize) -> *mut u8 {
 }
 
 #[no_mangle]
+#[cfg(not(target_os = "emscripten"))]
+pub unsafe fn __deallocate(ptr: *mut u8, _old_size: usize, _align: usize) {
+	extern crate alloc;
+	alloc::heap::deallocate(ptr, _old_size, _align)
+}
+
+#[no_mangle]
+#[cfg(target_os = "emscripten")]
 pub extern fn __deallocate(ptr: *mut u8, _old_size: usize, _align: usize) {
 	let hdr = ptr as usize - 8;
 	unsafe {
@@ -87,6 +103,7 @@ pub extern fn __deallocate(ptr: *mut u8, _old_size: usize, _align: usize) {
 ///
 /// A version of memcpy to reduce the amount of emitted code. A balance
 /// between performance and code size.
+#[cfg(target_os = "emscripten")]
 unsafe fn memcpy(dst: *mut u8, src: *mut u8, size: usize) {
 	let chunks = size / 4;
 	let slack = size - (chunks * 4);
@@ -108,6 +125,7 @@ unsafe fn memcpy(dst: *mut u8, src: *mut u8, size: usize) {
 }
 
 #[no_mangle]
+#[cfg(target_os = "emscripten")]
 pub extern fn __reallocate(ptr: *mut u8, _old_size: usize, size: usize, _align: usize) -> *mut u8 {
 	__deallocate(ptr, _old_size, _align);
 
@@ -124,14 +142,4 @@ pub extern fn __reallocate(ptr: *mut u8, _old_size: usize, size: usize, _align: 
 
 		nptr
 	}
-}
-
-#[no_mangle]
-pub extern fn __rust_reallocate_inplace(_ptr: *mut u8, old_size: usize, _size: usize, _align: usize) -> usize {
-	0
-} 
-
-#[no_mangle]
-pub extern fn __rust_usable_size(size: usize, _align: usize) -> usize {
-	size
 }

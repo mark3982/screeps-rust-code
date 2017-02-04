@@ -120,6 +120,7 @@ var run_func = null;
 var g_asm = null;
 var g_u32 = null;
 var g_room_enumerate_pointers = null;
+var g_enumerate_rooms_ptr = null;
 
 var id_to_object = [];
 var unlocid = 0;
@@ -169,7 +170,14 @@ module.exports.run = function () {
 	id_to_object = [];
 	unlocid = 0;
 	g_room_enumerate_pointers = {};
+	g_console_line = [];
+	g_enumerate_rooms_ptr = null;
 
+	// TODO: move this... its being done in TWO places...
+	//       the code needs to be unified and well explained
+	//       but, until then, it sets up the heap block or
+	//       by running it again it effectively clears the heap
+	//       without zeroing it
 	let heapstart = 1024 * 1024 * 2;
 
 	g_u32[1] = heapstart;
@@ -192,7 +200,7 @@ module.exports.run = function () {
 	}
 
 	let gameobj = g_asm.___allocate(12) | 0;
-	let data = g_asm.___allocate(cnt * 4 * 8, 1) | 0;
+	let data = g_asm.___allocate(cnt * 4 * 11, 1) | 0;
 
 	console.log('used-cpu-after-alloc', avgk('rust-after-alloc', Game.cpu.getUsed()));
 
@@ -219,9 +227,12 @@ module.exports.run = function () {
 		id = id_to_object.length | 0;
 		id_to_object.push(creep.room);		
 		g_u32[data++] = id | 0;
-		g_u32[data++] = 0; //room_name_to_guid32(creep.room.name) | 0;
+		g_u32[data++] = 1;
+		g_u32[data++] = room_name_to_guid32(creep.room.name) | 0;
 		g_u32[data++] = creep.carry.energy | 0;
 		g_u32[data++] = creep.carryCapacity | 0;
+		g_u32[data++] = creep.ticksToLive | 0;
+		g_u32[data++] = creep.spawning ? 1 : 0;
 	}
 
 	console.log('used-cpu-before-rust', avgk('before-rust', Game.cpu.getUsed()));
@@ -372,24 +383,29 @@ module.exports.setup(function (opts) {
 		//console.log('v', v);
 	}
 
-	//pub fn _creep_mem_write(cid: u32, key: u32, data: *const u8, data_size: usize);
-	//pub fn _creep_mem_read(cid: u32, key: u32, data: *const u8, data_size: usize);
-	//pub fn creep_mem_key_exist(cid: u32, key: u32) -> bool;
+	env.__print_string = function (data_addr, data_size) {
+		let s = [];
 
-	env.__creep_mem_write = function (cid, key, data_addr, data_size) {
-		var c = id_to_object[cid];
-
-		var s = [];
+		data_addr -= 8;
 
 		for (let q = 0; q < data_size; ++q) {
 			s.push(String.fromCharCode(u8[data_addr + q]));
 		}
 
-		//console.log('__creep_mem_write', cid, key, data_addr, data_size, s);
+		s = s.join('');
 
-		c.memory[key] = s.join('');
+		g_console_line.push(s);
 
 		return 1;
+	}
+
+	env.__print_i32 = function(v) {
+		g_console_line.push(String(v));
+	}
+
+	env.__print_eol = function () {
+		console.log(g_console_line.join(''));
+		g_console_line = [];
 	}
 
 	env.__creep_mem_read = function (cid, key, data_addr, data_size) {
@@ -414,8 +430,24 @@ module.exports.setup(function (opts) {
 		return 1;
 	}
 
+	env._creep_mem_write = function (cid, key, data_addr, data_size) {
+		let c = id_to_object[cid];
+
+		let s = [];
+
+		for (let q = 0; q < data_size; ++q) {
+			s.push(String.fromCharCode(u8[data_addr + q]));
+		}
+
+		c.memory[key] = s.join('');
+
+		return 1;
+	}
+
 	env._creep_mem_key_exist = function (cid, key, data_size) {
 		var c = id_to_object[cid];
+
+		console.log('mem key exist?', key, data_size, c.memory[key].length);
 
 		if (c.memory[key] === undefined) {
 			return 0;
@@ -428,6 +460,102 @@ module.exports.setup(function (opts) {
 		return 1;
 	}
 
+	//pub fn create_creep(spawnid: u32, spec: structure::SpawnCreepSpec) -> i32;
+	env._create_creep = function (spawnid, spec_addr) {
+		let s = id_to_object[spawnid];
+
+		if (s === undefined) {
+			// ActionResult::InvalidRustProxyID
+			return -100;
+		}
+
+		spec_addr = spec_addr;
+
+		let work = u8[spec_addr++];
+		let carry = u8[spec_addr++];
+		let attack = u8[spec_addr++];
+		let rattack = u8[spec_addr++];
+		let heal = u8[spec_addr++];
+		let claim = u8[spec_addr++];
+		let tough = u8[spec_addr++];
+		let move = u8[spec_addr++];
+
+		function u8_to_bytes(v) {
+			return String.fromCharCode(v);
+		}
+
+		function u32_to_bytes(v) {
+			return String.fromCharCode((v) & 0xff) +
+			String.fromCharCode((v >>> 8) & 0xff) +
+			String.fromCharCode((v >>> 16) & 0xff) +
+			String.fromCharCode((v >>> 24) & 0xff);
+		}
+
+		let role = u8_to_bytes(u8[spec_addr++]);
+		let subrole = u8_to_bytes(u8[spec_addr++]);
+		// compiler inserted padding to align on
+		// a 4-byte boundary for next large sized
+		// fields (this likely only works on little-endian)
+		// blank byte
+		// blank byte
+		spec_addr += 2;
+		spec_addr = spec_addr >> 2;
+
+		// 4
+		let room_guid_enum_type = u32[spec_addr++];
+		// 4
+		let room_guid_v = u32[spec_addr++];
+		let room_guid = '\x01\x00\x00\x00' + u32_to_bytes(room_guid_v);
+		// 20
+
+		console.log('room_guid', room_guid_v, room_guid);
+
+		let tmp = [];
+
+		for (let q = 0; q < room_guid.length; ++q) {
+			tmp.push(room_guid.charCodeAt(q));
+		}
+
+		console.log('debug', tmp);
+
+		if (room_guid_enum_type !== 1) {
+			// ActionResult::InvalidArgs
+			console.log('room_guid_enum_type invalid', room_guid_enum_type);
+			return -10;
+		}
+
+		let bparts = [];
+
+		function repadd(cnt, v) {
+			for (let x = 0; x < cnt; ++x) {
+				bparts.push(v);
+			}
+		}
+
+		repadd(tough, TOUGH);
+		repadd(claim, CLAIM);
+		repadd(carry, CARRY);
+		repadd(work, WORK);
+		repadd(rattack, RANGED_ATTACK);
+		repadd(attack, ATTACK);
+		repadd(heal, HEAL);
+
+		// The role and subrole are stored in binary and are
+		// according to Memkey found in the Rust code.
+		mem = {
+			1: role, 
+			2: subrole,
+			3: room_guid,
+		};
+
+		let res = s.createCreep(bparts, mem);
+
+		console.log(s, 'createCreep result=' + res);
+
+		return res;
+	}
+
+	// Deprecated. Used during development and may still be used.
 	env._spawn_build = function (bparts, bparts_count) {
 		// Problem is will break on Rust ABI change.
 		var tparts = [];
@@ -492,10 +620,51 @@ module.exports.setup(function (opts) {
 		id_to_object[cndx].move(dir);
 	};		
 
+	env._enumerate_rooms = function () {
+		// pub fn enumerate_rooms() -> &'static Vec<Room>;
+
+		if (g_enumerate_rooms_ptr === null) {
+			let rooms = Game.rooms;
+
+			let cnt = 0;
+
+			for (let k in rooms) {
+				console.log('count', k);
+				cnt++;
+			}
+
+			let addr = env.___rust_allocate(1 + 4 * 3, 1);
+			let data = env.___rust_allocate(cnt * 4 * 3, 1);
+
+			g_enumerate_rooms_ptr = addr;
+
+			addr = addr >> 2;
+
+			u32[addr++] = data;
+			u32[addr++] = cnt;
+			u32[addr++] = cnt;
+
+			data = data >> 2;
+
+			for (let k in rooms) {
+				let r = rooms[k];
+				let id = id_to_object.length | 0;
+				id_to_object.push(r);
+				console.log('r', r, id);
+				u32[data++] = id | 0;
+				u32[data++] = 1;
+				u32[data++] = room_name_to_guid32(r.name) | 0;
+			}
+		}
+
+		return g_enumerate_rooms_ptr;
+	} 
+
 	env._room_enumerate = function (rid, addr) {
+		// pub fn room_enumerate(id: u32) -> &'static super::room::Enumeration;
 		var room = id_to_object[rid];
 
-		//console.log('room enumerate', rid, room);
+		console.log('_room_enumerate', 'rid', rid);
 
 		var data;
 
@@ -503,7 +672,15 @@ module.exports.setup(function (opts) {
 			var sources = room.find(FIND_SOURCES);
 			var structs = room.find(FIND_MY_STRUCTURES);
 
-			let addr = env.___rust_allocate(4 * 7, 1); 
+			///////////////////////////////////////////////
+			// ALLOCATE MASTER CONTAINER AND SOURCES ARRAY
+			///////////////////////////////////////////////
+
+			// sources, spawns, extensions..
+			let ary_sets = 3;
+
+			// one single u32 field plus three u32 fields per ary_set
+			let addr = env.___rust_allocate(4 * 1 + 4 * 3 * ary_sets, 1); 
 			let data = env.___rust_allocate(sources.length * 4 * 4, 1) >> 2;
 
 			g_room_enumerate_pointers[room.name] = addr;
@@ -522,7 +699,12 @@ module.exports.setup(function (opts) {
 				u32[data++] = sources[q].ticksToRegenerate;
 			}
 
+			/////////////////////////////////////
+			// ENUMERATE STRUCTURES BY TYPE
+			/////////////////////////////////////
+
 			let spawns_col = [];
+			let exts_col = [];
 
 			for (let q = 0; q < structs.length; ++q) {
 				let s = structs[q];
@@ -530,21 +712,54 @@ module.exports.setup(function (opts) {
 				if (s.structureType === STRUCTURE_SPAWN) {
 					spawns_col.push(s);
 				}
+
+				if (s.structureType === STRUCTURE_EXTENSION) {
+					exts_col.push(s);
+				}
 			}
 
-			data = env.___rust_allocate(3 * spawns_col.length, 1) >> 2;
+			/////////////////////////////////////
+			// WRITE SPAWN STRUCTURES ARRAY
+			/////////////////////////////////////
 
-			u32[addr++] = data << 2;
+			env.___rust_allocate(128, 1);
+			data = env.___rust_allocate(4 * 6 * spawns_col.length, 1);
+
+			u32[addr++] = data;
 			u32[addr++] = spawns_col.length;
 			u32[addr++] = spawns_col.length;
+
+			data = data >> 2;
 
 			for (let q = 0; q < spawns_col.length; ++q) {
 				let s = spawns_col[q];
+				let id = get_id_for_object(s);
+				u32[data++] = id;
+				u32[data++] = s.hits;
+				u32[data++] = s.hitsMax;
+				u32[data++] = s.energy;
+				u32[data++] = s.energyCapacity;
+				u32[data++] = s.spawning === null ? 0 : 1;
+			}
+
+			/////////////////////////////////////
+			// WRITE EXTENSION STRUCTURES ARRAY
+			/////////////////////////////////////
+
+			data = env.___rust_allocate(5 * exts_col.length, 1) >> 2;
+
+			u32[addr++] = data << 2;
+			u32[addr++] = exts_col.length;
+			u32[addr++] = exts_col.length;
+
+			for (let q = 0; q < exts_col.length; ++q) {
+				let s = exts_col[q];
 				u32[data++] = get_id_for_object(s);
 				u32[data++] = s.hits;
 				u32[data++] = s.hitsMax;
+				u32[data++] = s.energy;
+				u32[data++] = s.energyCapacity;
 			}
-
 		}
 		
 		return g_room_enumerate_pointers[room.name];

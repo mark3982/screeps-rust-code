@@ -22,6 +22,8 @@ pub struct Creep {
 	pub room: room::Room,
 	pub carry_energy: u32,
 	pub carry_capacity: u32,
+	pub ticks_to_live: u32,
+	pub spawning: bool,
 }
 
 impl Creep {
