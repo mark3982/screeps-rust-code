@@ -352,9 +352,6 @@ impl Spawner {
 		// Order the queue by priority.
 		self.bque.sort();
 
-		ffi::print_string("bque sorted by priority");
-		ffi::print_eol();
-
 		// Transverse the queue and find the build order that
 		// needs to be built.
 		let mut blocked = false;
@@ -362,13 +359,7 @@ impl Spawner {
 			let bo = self.bque[q];
 			let bt = bo.spec.build_time() as f32;
 
-			ffi::print_string("looking build order");
-			ffi::print_eol();
-
 			if (bo.ttl as f32) < bt * 1.3 {
-				ffi::print_string("found one and looking for blocks");
-				ffi::print_eol();
-
 				// See if this will block anything else.
 				for w in 0..self.bque.len() {
 					let bo2 = self.bque[q];
@@ -386,13 +377,8 @@ impl Spawner {
 				}
 
 				if blocked {
-					ffi::print_string("was blocked");
-					ffi::print_eol();
 					break;
 				}
-
-				ffi::print_string("not blocked; build trying");
-				ffi::print_eol();
 
 				// IF no blocks then try to build it, then exit the 
 				// loop since this blocks all below.
@@ -400,9 +386,6 @@ impl Spawner {
 				match res.2 {	
 					Option::None => (),
 					Option::Some(spawn) => {
-						ffi::print_string("got spawn to build with");
-						ffi::print_eol();
-
 						spawn.create_creep(&SpawnCreepSpec {
 							work: bo.spec.work,
 							carry: bo.spec.carry,
@@ -435,7 +418,7 @@ impl Spawner {
 	pub fn get_spawn_energy_and_free_spawn(&self) -> (u32, u32, Option<structure::Spawn>) {
 		use core;
 
-		let renum = self.room.enumerate();
+		let renum = self.room.get_enum();
 
 		let mut spawn: Option<structure::Spawn> = Option::None;
 
@@ -448,13 +431,7 @@ impl Spawner {
 			energy_capacity += spawn_ref.energy_capacity;
 			energy_ava += spawn_ref.energy;
 
-			ffi::print_string("checking if spawn is spawning =");
-			ffi::print_i32(spawn_ref.spawning as i32);
-			ffi::print_eol();
-
 			if spawn_ref.spawning == false {
-				ffi::print_string("found spawn not spawning");
-				ffi::print_eol();
 				spawn = Option::Some((*spawn_ref).clone());
 			}
 		}
@@ -470,7 +447,7 @@ impl Spawner {
 	}
 
 	pub fn add_build_queue_order(&mut self, bo: BuildOrder, existing: &Vec<usize>, creeps: &Vec<Option<Creep>>) {
-		let renum = self.room.enumerate();
+		let renum = self.room.get_enum();
 
 		let res = self.get_spawn_energy_and_free_spawn();
 
@@ -485,9 +462,6 @@ impl Spawner {
 		} else {
 			nspec = bo.spec.limit_by_energy(energy_ava);
 		}
-
-		ffi::print_string("nspec created");
-		ffi::print_eol();
 
 		// The existing must be ordered from highest TTL to the
 		// lowest TTL since that will be associated with the build
@@ -507,9 +481,6 @@ impl Spawner {
 
 		ndx.sort();
 
-		ffi::print_string("existing ordered by ttl");
-		ffi::print_eol();
-
 		let ndxlast = ndx.len() - 1;
 
 		for q in 0..nspec.num as usize {
@@ -518,15 +489,6 @@ impl Spawner {
 			} else {
 				ndx[ndxlast - q] & 0xFFFF
 			};
-
-			ffi::print_string("build order created ");
-			ffi::print_string("work ");
-			ffi::print_i32(nspec.work as i32);
-			ffi::print_string(" carry ");
-			ffi::print_i32(nspec.carry as i32);
-			ffi::print_string(" move ");
-			ffi::print_i32(nspec.move_parts() as i32);
-			ffi::print_eol();
 
 			self.bque.push(BuildOrder {
 				spec: nspec,
@@ -577,10 +539,6 @@ impl Spawner {
 			Vec::with_capacity(0)
 		} else {
 			let mut out: Vec<Creep> = Vec::with_capacity(ndx.len());
-
-			ffi::print_string("ndx.len()=");
-			ffi::print_i32(ndx.len() as i32);
-			ffi::print_eol();
 
 			while ndx.len() > 0 {
 				out.push(game.creeps[ndx.pop()].take().unwrap());

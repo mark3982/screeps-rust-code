@@ -184,6 +184,7 @@ impl ActionResult {
 
 pub struct Game {
 	pub creeps: Vec<Option<Creep>>,
+	pub rooms: &'static Vec<room::Room>,
 }
 
 pub struct GatherAndWorkCreep {
@@ -252,6 +253,10 @@ impl GatherAndWorkCreep {
 
 		let gathering = creep.mem_read::<u8>(Memkey::Gathering).unwrap_or(0);
 
+		print_string("creep.carry_capacity=");
+		print_i32(creep.carry_capacity as i32);
+		print_eol();
+
 		if gathering == 0 && creep.carry_energy == 0 {
 			creep.mem_write::<u8>(Memkey::Gathering, 1);
 		}
@@ -261,11 +266,15 @@ impl GatherAndWorkCreep {
 		}
 
 		if gathering == 1 {
+			print_string("gathering");
+			print_eol();
 			match creep.harvest(source) {
 				ActionResult::NotInRange => { creep.moveto(source); },
 				_ => (),
 			}
 		} else {
+			print_string("transfering");
+			print_eol();			
 			match creep.transfer(target) {
 				ActionResult::NotInRange => { creep.moveto(target); },
 				_ => (),
@@ -314,21 +323,17 @@ impl SubRole {
 pub fn game_tick_room(game: &mut Game, room: &Room) {
 	let mut spawner = spawner::Spawner::new(room.clone());
 
-	print_string("room ");
-	print_i32(room.id as i32);
-	print_eol();
-
 	/// Enumerate sources in the room.
-	let renum = room.enumerate();
+	let renum = room.get_enum();
 
 	for q in 0..renum.sources.len() {
 		let source = &renum.sources[q];
 
 		/// Use the spawner to get one or more creeps capable
 		/// of fully harvesting the source.
-		let creeps = spawner.get_creep(game, spawner::BodyPartSpec {
+		let mut creeps = spawner.get_creep(game, spawner::BodyPartSpec {
 			work: 6,
-			carry: 0,
+			carry: 6,
 			claim: 0,
 			attack: 0,
 			rattack: 0,
@@ -339,15 +344,18 @@ pub fn game_tick_room(game: &mut Game, room: &Room) {
 		}, Role::SourceMiner, SubRole::None, -5.0);
 
 		for w in 0..creeps.len() {
-			let creep = &creeps[w];
-			print_string("@@@@@creep ");
-			print_i32(w as i32);
+			let creep = creeps.pop();
+			print_string("spawner returned creep ");
+			print_i32(creep.id as i32);
 			print_eol();
-		}
 
-		print_string("source");
-		print_i32(source.id as i32);
-		print_eol();
+			print_string("renum sources[0]=");
+			print_i32(renum.sources[0].id as i32);
+			print_eol();
+
+			let creep = GatherAndWorkCreep::new(creep);
+			creep.action_transfer(renum.sources[0].id, renum.spawns[0].structure.id);
+		}
 	}
 
 	spawner.action(game);
@@ -359,18 +367,17 @@ pub extern fn game_tick(game: &mut Game) -> u32 {
 	print_string("hello world");
 	print_eol();
 
-	print_string("size_of debug ");
-	print_i32(core::mem::size_of::<Role>() as i32);
-	print_eol();
+	//print_string("size_of debug ");
+	//print_i32(core::mem::size_of::<Option<Creep>>() as i32);
+	//print_eol();
 
-	let rooms = Room::enumerate_rooms();
-
-	print_string("rooms.len()=");
-	print_i32(rooms.len() as i32);
-	print_eol();
+	let rooms = game.rooms;
 
 	for q in 0..rooms.len() {
 		let room = &rooms[q];
+		print_string("got room ");
+		print_i32(room.id as i32);
+		print_eol();
 		game_tick_room(game, room);
 	}
 	0
@@ -393,10 +400,10 @@ pub fn game_tick_mine_and_upgrade(game: &mut Game) -> u32 {
 	let mut q = 0;
 
 	if game.creeps.len() > 0 {
-		let renum = game.creeps[0].as_ref().unwrap().room.enumerate();
+		let renum = game.creeps[0].as_ref().unwrap().room.get_enum();
 
 		while q < game.creeps.len() && q < 1 {
-			let creep = GatherAndWorkCreep::new(game.creeps[q].take().unwrap());	
+			let creep = GatherAndWorkCreep::new(game.creeps[q].take().unwrap());
 			creep.action_transfer(renum.sources[0].id, renum.spawns[0].structure.id);
 			q += 1;
 		}
